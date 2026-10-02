@@ -178,6 +178,7 @@ init_main() {
     git -c core.longpaths=true clone --branch main "$REMOTE/$p.git" "$repo"
     git -C "$repo" config core.longpaths true
   done
+  setup_debugger "$TEAM/main"
 }
 
 # Branch da tarefa já existente (local ou no origin) é reaproveitada; a base só vale para branch nova.
@@ -193,12 +194,19 @@ source_ref() {
 }
 
 add_worktree() {
-  local repo="$TEAM/main/$1" path="$WORK/$1" ref
+  local repo="$TEAM/main/$1" path="$WORK/$1" ref answer
   if [ -e "$path" ]; then
     echo "$1: $path já existe; reaproveitando."
     return
   fi
   ref=$(source_ref "$1")
+  # Base que só existe num dos projetos (ex.: speckit, só no VRCheckout): oferece a main no outro.
+  if [ -z "$ref" ] && [ "$BASE" != main ] && [ -t 0 ]; then
+    read -r -p "$1: base $BASE não existe. Usar a main? [s/N] " answer
+    case "$answer" in
+      s|S|sim|Sim) ref=$(BASE=main source_ref "$1") ;;
+    esac
+  fi
   case "$ref" in
     "") echo "$1: base $BASE não existe." >&2; exit 1 ;;
     "$KEY")
@@ -231,8 +239,9 @@ require_speckit() {
 
 # Debug de Go e Dart (e o compound API + Checkout) abrindo a raiz do bundle no VS Code.
 # O settings.json aponta para o .fvm de speckit/VRCheckout: o bundle não tem .fvm próprio.
+# $1 = pasta que recebe o .vscode (a da tarefa ou main/).
 setup_debugger() {
-  local vscode="$WORK/.vscode" f
+  local vscode="$1/.vscode" f
   mkdir -p "$vscode"
   for f in launch.json settings.json; do
     [ -f "$vscode/$f" ] && continue
@@ -261,7 +270,7 @@ create_bundle() {
     branch=$(git -C "$WORK/$p" rev-parse --abbrev-ref HEAD)
     [ "$branch" = "$KEY" ] || echo "Aviso: $p está na branch $branch, não em $KEY." >&2
   done
-  setup_debugger
+  setup_debugger "$WORK"
 }
 
 TABS=()
