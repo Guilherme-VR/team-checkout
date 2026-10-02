@@ -1,0 +1,6 @@
+# Ignora tudo, exceto o script e a config do VS Code.
+/*
+!/.gitignore
+!/.vscode/
+!/work.sh
+!/.gitattributes
