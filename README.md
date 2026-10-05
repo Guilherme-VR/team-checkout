@@ -111,6 +111,16 @@ Esse comando:
 O hook `vr-escopo-specify` lê a tarefa no Jira, levanta o que ela toca em cada projeto e grava
 `specs/INP-2403/spec.md`.
 
+Para usar uma branch com nome diferente da tarefa, passe `--branch` (ou `-n`). A pasta e a spec continuam
+com o nome da tarefa; o `-b` segue sendo a base de onde a branch nova parte:
+
+```bash
+./work.sh INP-2403 -n feature/troco -b speckit   # pasta INP-2403/, branch feature/troco
+```
+
+Os comandos seguintes (`implementar`, `apagar`) não precisam repetir o `--branch`: eles usam a branch em que
+as worktrees da tarefa já estão.
+
 Texto extra depois da chave vai junto com o comando:
 
 ```bash

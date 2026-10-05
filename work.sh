@@ -2,6 +2,9 @@
 # Monta e desmonta a pasta <Checkout-Team>/INP-XXXX de uma tarefa: worktrees de VRPdvAPI e
 # VRCheckout na branch INP-XXXX e debug do VS Code. Comandos em ajuda().
 set -e
+# Abas abertas por versões antigas deste script herdaram MSYS_NO_PATHCONV; com ela, o git não
+# acha os caminhos /c/... e todo "git -C" falha.
+unset MSYS_NO_PATHCONV
 
 ajuda() {
   cat <<'EOF'
@@ -18,9 +21,12 @@ Comandos:
                Recusa se houver alteração não commitada ou commit sem push.
   ajuda        Mostra esta mensagem.
 
-<tarefa>: nome exato da tarefa, que vira o nome da branch e da pasta (ex.: INP-2403).
+<tarefa>: nome exato da tarefa, que vira o nome da pasta e, sem --branch, o da branch
+         (ex.: INP-2403).
 
 Opções:
+  --branch, -n <nome>  Nome da branch da tarefa (padrão: <tarefa>). No apagar, sem esta
+                       opção, vale a branch em que a worktree da tarefa está.
   --base, -b <branch>  Branch de partida de uma branch nova (padrão: main).
   --local, -l          Parte da <branch> local, com commits sem push, em vez de origin/<branch>.
   --forcar, -f         No apagar, descarta alterações e commits sem push.
@@ -33,6 +39,7 @@ Exemplos:
   ./work.sh INP-2403                        cria e abre o specify
   ./work.sh criar INP-2403                  só cria as worktrees
   ./work.sh criar INP-2403 -b release/6.10  branch nova a partir de release/6.10
+  ./work.sh INP-2403 -n feature/troco       pasta INP-2403, branch feature/troco
   ./work.sh implementar INP-2403            abre as abas do implement
   ./work.sh apagar INP-2403                 remove tudo da tarefa localmente
 EOF
@@ -40,6 +47,7 @@ EOF
 
 CMD=especificar
 KEY=
+BRANCH=
 BASE=main
 LOCAL=
 FORCE=
@@ -51,6 +59,9 @@ while [ $# -gt 0 ]; do
     -h|--help|help) CMD=ajuda ;;
     --implementar|-i) CMD=implementar ;;
     --apagar) CMD=apagar ;;
+    --branch|-n)
+      [ -n "$2" ] || { echo "--branch precisa de um nome." >&2; exit 1; }
+      BRANCH="$2"; shift ;;
     --base|-b)
       [ -n "$2" ] || { echo "--base precisa de uma branch." >&2; exit 1; }
       BASE="$2"; shift ;;
@@ -74,6 +85,10 @@ if [ -z "$KEY" ] && [ "$CMD" != init ]; then
   echo "Informe a tarefa: ./work.sh $CMD INP-XXXX (veja ./work.sh ajuda)" >&2
   exit 1
 fi
+if [ -n "$BRANCH" ] && ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1; then
+  echo "--branch: nome de branch inválido: $BRANCH" >&2
+  exit 1
+fi
 
 DIR=$(dirname "$(realpath "$0")")
 # Roda tanto de speckit/ quanto de uma cópia na raiz do Checkout-Team.
@@ -88,33 +103,43 @@ PROJECTS=(VRPdvAPI VRCheckout)
 
 has_ref() { git -C "$1" rev-parse --verify --quiet "$2" >/dev/null; }
 
-# A primeira entrada é o próprio main/<repo>, que nunca é removido.
+# Branch da tarefa no projeto $1: a do --branch; sem ele, a da worktree que já existe
+# (criada antes com --branch); sem worktree, o nome da tarefa.
+branch_of() {
+  local b
+  if [ -n "$BRANCH" ]; then echo "$BRANCH"; return; fi
+  [ -e "$WORK/$1" ] && b=$(git -C "$WORK/$1" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  if [ -n "$b" ] && [ "$b" != HEAD ]; then echo "$b"; else echo "$KEY"; fi
+}
+
+# $1 = repo, $2 = branch. A primeira entrada é o próprio main/<repo>, que nunca é removido.
 worktree_of() {
   git -C "$1" worktree list --porcelain |
-    awk -v b="branch refs/heads/$KEY" '/^worktree /{n++; w=substr($0,10)} n>1 && $0==b{print w}'
+    awk -v b="branch refs/heads/$2" '/^worktree /{n++; w=substr($0,10)} n>1 && $0==b{print w}'
 }
 
 # Confere os dois projetos antes de apagar qualquer coisa, para não deixar a tarefa pela metade.
 delete_local() {
-  local problems=() p repo wt n
+  local problems=() p repo wt n b
   for p in "${PROJECTS[@]}"; do
     git -C "$TEAM/main/$p" worktree prune
   done
   for p in "${PROJECTS[@]}"; do
     repo="$TEAM/main/$p"
-    has_ref "$repo" "refs/heads/$KEY" || continue
-    if [ "$(git -C "$repo" rev-parse --abbrev-ref HEAD)" = "$KEY" ]; then
-      echo "$p: main/$p está na branch $KEY; troque de branch antes." >&2
+    b=$(branch_of "$p")
+    has_ref "$repo" "refs/heads/$b" || continue
+    if [ "$(git -C "$repo" rev-parse --abbrev-ref HEAD)" = "$b" ]; then
+      echo "$p: main/$p está na branch $b; troque de branch antes." >&2
       exit 1
     fi
-    wt=$(worktree_of "$repo")
+    wt=$(worktree_of "$repo" "$b")
     # A spec em specs/INP-XXXX não conta como pendência: vai embora junto com a worktree.
     if [ -n "$wt" ] && [ -n "$(git -C "$wt" status --porcelain -- . ":(exclude)specs/$KEY")" ]; then
       problems+=("$p: alterações não commitadas em $wt")
     fi
-    n=$(git -C "$repo" rev-list --count "refs/heads/$KEY" --not --remotes)
+    n=$(git -C "$repo" rev-list --count "refs/heads/$b" --not --remotes)
     if [ "$n" -gt 0 ]; then
-      problems+=("$p: $n commit(s) só locais em $KEY")
+      problems+=("$p: $n commit(s) só locais em $b")
     fi
   done
   if [ ${#problems[@]} -gt 0 ] && [ -z "$FORCE" ]; then
@@ -125,19 +150,20 @@ delete_local() {
 
   for p in "${PROJECTS[@]}"; do
     repo="$TEAM/main/$p"
-    if ! has_ref "$repo" "refs/heads/$KEY"; then
-      echo "$p: sem branch local $KEY."
+    b=$(branch_of "$p")
+    if ! has_ref "$repo" "refs/heads/$b"; then
+      echo "$p: sem branch local $b."
       continue
     fi
-    wt=$(worktree_of "$repo")
+    wt=$(worktree_of "$repo" "$b")
     if [ -n "$wt" ]; then
       # .dart_tool e ephemeral/ passam de 260 caracteres; sem longpaths a remoção para no meio.
       # --force sempre: a checagem acima já barrou pendências, e a spec não commitada travaria o git.
       git -c core.longpaths=true -C "$repo" worktree remove --force "$wt"
       echo "$p: worktree $wt removida."
     fi
-    git -C "$repo" branch -D "$KEY" >/dev/null
-    echo "$p: branch local $KEY apagada."
+    git -C "$repo" branch -D "$b" >/dev/null
+    echo "$p: branch local $b apagada."
   done
 
   # Bundles antigos têm junctions para shared/; só some a pasta quando sobrou apenas o CLAUDE.md (hardlink).
@@ -184,21 +210,23 @@ init_main() {
 # Branch da tarefa já existente (local ou no origin) é reaproveitada; a base só vale para branch nova.
 # Sem --local, origin/<base> primeiro, para não partir de uma branch local desatualizada.
 source_ref() {
-  local repo="$TEAM/main/$1" first="origin/$BASE" second="$BASE"
+  local repo="$TEAM/main/$1" b first="origin/$BASE" second="$BASE"
+  b=$(branch_of "$1")
   [ -n "$LOCAL" ] && { first="$BASE"; second="origin/$BASE"; }
-  if has_ref "$repo" "refs/heads/$KEY"; then echo "$KEY"
-  elif has_ref "$repo" "refs/remotes/origin/$KEY"; then echo "origin/$KEY"
+  if has_ref "$repo" "refs/heads/$b"; then echo "$b"
+  elif has_ref "$repo" "refs/remotes/origin/$b"; then echo "origin/$b"
   elif has_ref "$repo" "$first"; then echo "$first"
   elif has_ref "$repo" "$second"; then echo "$second"
   fi
 }
 
 add_worktree() {
-  local repo="$TEAM/main/$1" path="$WORK/$1" ref answer
+  local repo="$TEAM/main/$1" path="$WORK/$1" b ref answer
   if [ -e "$path" ]; then
     echo "$1: $path já existe; reaproveitando."
     return
   fi
+  b=$(branch_of "$1")
   ref=$(source_ref "$1")
   # Base que só existe num dos projetos (ex.: speckit, só no VRCheckout): oferece a main no outro.
   if [ -z "$ref" ] && [ "$BASE" != main ] && [ -t 0 ]; then
@@ -209,15 +237,15 @@ add_worktree() {
   fi
   case "$ref" in
     "") echo "$1: base $BASE não existe." >&2; exit 1 ;;
-    "$KEY")
-      echo "$1: usando a branch local $KEY."
-      git -C "$repo" worktree add "$path" "$KEY" ;;
-    "origin/$KEY")
-      echo "$1: rastreando origin/$KEY."
-      git -C "$repo" worktree add --track -b "$KEY" "$path" "origin/$KEY" ;;
+    "$b")
+      echo "$1: usando a branch local $b."
+      git -C "$repo" worktree add "$path" "$b" ;;
+    "origin/$b")
+      echo "$1: rastreando origin/$b."
+      git -C "$repo" worktree add --track -b "$b" "$path" "origin/$b" ;;
     *)
-      echo "$1: branch nova $KEY a partir de $ref."
-      git -C "$repo" worktree add --no-track -b "$KEY" "$path" "$ref" ;;
+      echo "$1: branch nova $b a partir de $ref."
+      git -C "$repo" worktree add --no-track -b "$b" "$path" "$ref" ;;
   esac
 }
 
@@ -233,7 +261,7 @@ require_speckit() {
   fi
   [ -n "$files" ] && return
   echo "VRCheckout: ${ref:-$BASE} não tem o speckit (.specify/) versionado." >&2
-  echo "Parta de uma base que tenha, ex.: ./work.sh $CMD $KEY -b speckit -l" >&2
+  echo "Parta de uma base que tenha, ex.: ./work.sh $CMD $KEY${BRANCH:+ -n $BRANCH} -b speckit -l" >&2
   exit 1
 }
 
@@ -253,9 +281,19 @@ setup_debugger() {
   done
 }
 
+# Libs nativas do ObjectBox, sem as quais o flutter test do VRCheckout não roda. Ficam em lib/
+# (no .gitignore), uma cópia por worktree. Falha não impede a tarefa: só os testes ficam sem rodar.
+install_objectbox() {
+  local dir="$WORK/VRCheckout"
+  [ -f "$dir/lib/objectbox.dll" ] && return
+  echo "VRCheckout: instalando as libs do ObjectBox para os testes."
+  (cd "$dir" && bash <(curl -fsSL https://raw.githubusercontent.com/objectbox/objectbox-dart/main/install.sh)) ||
+    echo "Aviso: libs do ObjectBox não instaladas; rode o install.sh do README do VRCheckout." >&2
+}
+
 # $1 = speckit: exige o fluxo speckit versionado na branch (especificar/implementar).
 create_bundle() {
-  local p branch
+  local p branch expected
   # Offline não impede: a base pode existir localmente.
   for p in "${PROJECTS[@]}"; do
     git -C "$TEAM/main/$p" fetch origin --quiet || echo "$p: fetch falhou; seguindo com as refs locais." >&2
@@ -268,8 +306,11 @@ create_bundle() {
   for p in "${PROJECTS[@]}"; do
     add_worktree "$p"
     branch=$(git -C "$WORK/$p" rev-parse --abbrev-ref HEAD)
-    [ "$branch" = "$KEY" ] || echo "Aviso: $p está na branch $branch, não em $KEY." >&2
+    # Sem --branch, a worktree reaproveitada vale como está: pode ter sido criada com --branch.
+    expected=$(branch_of "$p")
+    [ "$branch" = "$expected" ] || echo "Aviso: $p está na branch $branch, não em $expected." >&2
   done
+  install_objectbox
   setup_debugger "$WORK"
 }
 
@@ -289,8 +330,9 @@ open_tabs() {
   [ -n "$WT_SESSION" ] && window=(-w 0)
   # Herdado de uma sessão do Claude, faz as abas abrirem como sub-sessão (sem transcript).
   unset CLAUDE_CODE_CHILD_SESSION
-  # Sem MSYS_NO_PATHCONV o Git Bash converte "/speckit-..." em caminho do Windows.
-  MSYS_NO_PATHCONV=1 wt.exe "${window[@]}" "${TABS[@]}"
+  # Sem a exclusão o Git Bash converte "/speckit-..." em caminho do Windows. Exclui só esse
+  # prefixo: as abas herdam a variável, e MSYS_NO_PATHCONV quebraria todo "git -C /c/..." nelas.
+  MSYS2_ARG_CONV_EXCL='/speckit' wt.exe "${window[@]}" "${TABS[@]}"
 }
 
 case "$CMD" in
