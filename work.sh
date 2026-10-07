@@ -19,6 +19,7 @@ Comandos:
                (tasks-api.md, tasks-checkout.md). Rode depois do /speckit-tasks.
   apagar       Remove as worktrees e a branch local da tarefa; o remoto fica.
                Recusa se houver alteração não commitada ou commit sem push.
+               Antes, encerra o servidor do CodeGraph aberto na pasta da tarefa.
   ajuda        Mostra esta mensagem.
 
 <tarefa>: nome exato da tarefa, que vira o nome da pasta e, sem --branch, o da branch
@@ -118,6 +119,28 @@ worktree_of() {
     awk -v b="branch refs/heads/$2" '/^worktree /{n++; w=substr($0,10)} n>1 && $0==b{print w}'
 }
 
+# Encerra os servidores do CodeGraph (`codegraph serve --path <pasta>`) da pasta da tarefa ou de
+# uma subpasta dela, com os processos filhos. Um servidor órfão, de sessão do Claude já fechada,
+# segura o índice em .codegraph/ e a remoção da worktree falha. Os de outras tarefas ficam.
+stop_codegraph() {
+  command -v powershell.exe >/dev/null || return 0
+  CG_PATH=$(cygpath -w "$WORK") powershell.exe -NoProfile -NonInteractive -Command '
+    $dir = [regex]::Escape($env:CG_PATH.TrimEnd("\"))
+    $all = Get-CimInstance Win32_Process
+    function Stop-Tree($id) {
+      $all | Where-Object ParentProcessId -eq $id | ForEach-Object { Stop-Tree $_.ProcessId }
+      Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+    }
+    $all | Where-Object {
+      $_.CommandLine -match "codegraph(\.js)?`"?\s+serve" -and
+      $_.CommandLine -match "--path\s+`"?$dir(\\|`"|\s|$)"
+    } | ForEach-Object {
+      Stop-Tree $_.ProcessId
+      "CodeGraph: servidor $($_.ProcessId) encerrado."
+    }
+  ' | tr -d '\r'
+}
+
 # Confere os dois projetos antes de apagar qualquer coisa, para não deixar a tarefa pela metade.
 delete_local() {
   local problems=() p repo wt n b
@@ -147,6 +170,8 @@ delete_local() {
     echo "Nada apagado. Resolva, ou repita com --forcar para descartar." >&2
     exit 1
   fi
+
+  stop_codegraph
 
   for p in "${PROJECTS[@]}"; do
     repo="$TEAM/main/$p"
