@@ -18,69 +18,7 @@ team-checkout/
         └── specs/INP-2403/
 ```
 
-## Pré-requisitos
 
-- Git Bash e Windows Terminal (`wt.exe`), porque o `work.sh` abre o Claude Code em abas novas.
-- Claude Code com acesso ao Jira, que o `/speckit-specify` usa para ler a tarefa.
-- FVM para gerenciar as versões do Flutter (veja a seção abaixo).
-
-## Flutter com FVM
-
-O Flutter **3.32.5** fica como versão global da máquina e o VRCheckout usa a **3.44.9**, fixada no
-próprio projeto. Fora do VRCheckout, `flutter` responde 3.32.5; dentro dele, `fvm flutter` responde 3.44.9.
-
-### Instalar o FVM (uma vez)
-
-```bash
-choco install fvm                  # via Chocolatey
-# ou
-dart pub global activate fvm       # via Dart já instalado
-```
-
-No Windows o FVM cria links simbólicos, então ative o **Modo de Desenvolvedor**
-(Configurações > Sistema > Para desenvolvedores) ou rode o terminal como administrador.
-
-### Instalar as versões e definir a global
-
-```bash
-fvm install 3.32.5
-fvm install 3.44.9
-fvm global 3.32.5
-```
-
-Coloque `%LOCALAPPDATA%\fvm\default\bin` no `PATH` do Windows, antes de qualquer outra instalação do
-Flutter, e remova do `PATH` o Flutter instalado à mão, se houver. Abra um terminal novo e confira:
-
-```bash
-flutter --version    # 3.32.5
-fvm list             # mostra a global marcada
-```
-
-### Fixar a versão local do VRCheckout
-
-Em cada worktree do VRCheckout (`main/VRCheckout` e `INP-2403/VRCheckout`):
-
-```bash
-cd INP-2403/VRCheckout
-fvm use 3.44.9
-```
-
-O comando grava a versão em `.fvmrc` e cria o link `.fvm/flutter_sdk`. O `.vscode/settings.json` da pasta
-da tarefa já aponta para ele (`"dart.flutterSdkPath": "VRCheckout/.fvm/flutter_sdk"`), então o debug no
-VS Code usa a 3.44.9 sem configuração extra. Se o repositório já tiver o
-`.fvmrc` com a 3.44.9, basta `fvm install` dentro da pasta. A pasta `.fvm/` não vai para o git; confira se ela
-está no `.gitignore`.
-
-Dentro do projeto, sempre chame o Flutter pelo FVM:
-
-```bash
-fvm flutter --version    # 3.44.9
-fvm flutter pub get
-fvm flutter run
-```
-
-Depois de rodar `fvm use`, reinicie o VS Code (ou `Dart: Restart Analysis Server`) para ele pegar o SDK
-novo.
 
 ## 1. Preparar o ambiente (uma vez)
 
@@ -198,12 +136,3 @@ alteração não commitada ou commit sem push em qualquer um dos projetos; `--fo
 |---|---|
 | `./work.sh criar <branch>` | Só cria as worktrees, sem speckit nem aba (ex.: `./work.sh criar 8.6.0` para trabalhar numa branch existente). |
 | `./work.sh ajuda` | Lista comandos e opções. |
-
-## Skills auxiliares do VRCheckout
-
-| Skill | Quando usar |
-|---|---|
-| `/vr-add-parametro` | Novo parâmetro de PDV, da API (Go) até o Checkout (Dart). |
-| `/vr-add-funcao` | Nova função (`enum Funcao`) com permissão, tecla e log. |
-| `/vr-roteiro-teste` | Gerar de novo o roteiro de teste fora do implement. |
-| `/vr-sincronizar-memoria` | Depois de mexer em `.specify/memory` ou em `CLAUDE.md`. |
