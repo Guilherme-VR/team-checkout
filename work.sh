@@ -198,6 +198,12 @@ delete_local() {
       rm -f "$WORK/.vscode/launch.json" "$WORK/.vscode/settings.json"
       rmdir "$WORK/.vscode" 2>/dev/null || true
     fi
+    # Índice do CodeGraph da tarefa (vr-codegraph.sh): derivado, o servidor já foi encerrado acima.
+    if [ -d "$WORK/.codegraph" ] && [ ! -L "$WORK/.codegraph" ]; then
+      # Banco aberto por um processo que o stop_codegraph não reconheceu: avisa em vez de abortar.
+      rm -rf "$WORK/.codegraph" ||
+        echo "Aviso: $WORK/.codegraph em uso; feche a sessão do Claude dessa pasta e apague à mão." >&2
+    fi
     if [ "$(ls -A "$WORK")" = "CLAUDE.md" ]; then
       rm "$WORK/CLAUDE.md"
       rmdir "$WORK"
