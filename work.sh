@@ -235,6 +235,7 @@ init_main() {
     git -c core.longpaths=true clone --branch main "$REMOTE/$p.git" "$repo"
     git -C "$repo" config core.longpaths true
   done
+  install_fvm "$TEAM/main/VRCheckout"
   setup_debugger "$TEAM/main"
 }
 
@@ -322,6 +323,20 @@ install_objectbox() {
     echo "Aviso: libs do ObjectBox não instaladas; rode o install.sh do README do VRCheckout." >&2
 }
 
+# Flutter do .fvmrc do VRCheckout, que também cria o .fvm/flutter_sdk usado pelo settings.json.
+# Só nas branches com .fvmrc. Falha não impede a tarefa. $1 = pasta do VRCheckout.
+install_fvm() {
+  local dir="$1"
+  [ -f "$dir/.fvmrc" ] || return 0
+  if ! command -v fvm >/dev/null; then
+    echo "Aviso: fvm não encontrado; rode fvm install em $dir." >&2
+    return 0
+  fi
+  echo "VRCheckout: fvm install."
+  (cd "$dir" && fvm install) ||
+    echo "Aviso: fvm install falhou em $dir; rode à mão." >&2
+}
+
 # $1 = speckit: exige o fluxo speckit versionado na branch (especificar/implementar).
 create_bundle() {
   local p branch expected
@@ -341,6 +356,7 @@ create_bundle() {
     expected=$(branch_of "$p")
     [ "$branch" = "$expected" ] || echo "Aviso: $p está na branch $branch, não em $expected." >&2
   done
+  install_fvm "$WORK/VRCheckout"
   install_objectbox
   setup_debugger "$WORK"
 }
